@@ -1,0 +1,148 @@
+# Cost Model Template (YAML)
+
+Declarative cost model for ML inference attribution. Versioned for historical reprocessing.
+
+```yaml
+# cost-model-v1.yaml
+version: "1.0"
+description: "A100 80GB cluster + vendor API pricing (2026-Q2)"
+
+# Unit costs - update quarterly or on contract change
+resources:
+  # Compute
+  gpu_hour:
+    unit: "hour"
+    rate_usd: 4.50          # A100 80GB on-demand (aws p4d.24xlarge / gcp a2-highgpu-8g)
+    description: "Full GPU hour including host"
+  gpu_minute:
+    unit: "minute"
+    rate_usd: 0.075         # Derived: 4.50 / 60
+
+  # Token pricing (vendor APIs)
+  input_token_per_1m:
+    unit: "1M_tokens"
+    rate_usd: 2.50          # GPT-4o / Claude 3.5 Sonnet input
+    description: "Fresh prompt tokens"
+  output_token_per_1m:
+    unit: "1M_tokens"
+    rate_usd: 10.00         # GPT-4o / Claude 3.5 Sonnet output
+    description: "Generated completion tokens"
+  cached_token_per_1m:
+    unit: "1M_tokens"
+    rate_usd: 0.50          # ~20% of fresh input (KV cache read)
+    description: "Cache-hit prompt tokens"
+
+  # Networking
+  egress_gb:
+    unit: "GB"
+    rate_usd: 0.08          # AWS/GCP inter-zone + internet egress blended
+  ingress_gb:
+    unit: "GB"
+    rate_usd: 0.00          # Typically free
+
+  # Storage (monthly, prorated hourly)
+  model_storage_gb_month:
+    unit: "GB_month"
+    rate_usd: 0.10          # S3 Standard / GCS Standard
+  kv_cache_gb_month:
+    unit: "GB_month"
+    rate_usd: 0.15          # Higher for SSD-backed cache
+  vector_db_gb_month:
+    unit: "GB_month"
+    rate_usd: 0.25          # Pinecone / Weaviate / pgvector managed
+
+  # Orchestration overhead
+  request_overhead_usd:
+    unit: "request"
+    rate_usd: 0.00001       # Gateway/router/queue overhead
+  cold_start_penalty_usd:
+    unit: "cold_start"
+    rate_usd: 0.05          # Model load + first token latency
+
+# Shared cost allocation strategy
+shared_allocation:
+  method: "proportional_to_compute"
+  # Alternatives:
+  # - "proportional_to_tokens" (total tokens = prompt + completion)
+  # - "proportional_to_requests" (equal per request)
+  # - "fixed_per_tenant" (tenant-level flat fee + variable)
+  compute_metric: "gpu_ms"  # or "gpu_seconds", "token_count"
+
+# Per-model overrides (merge with base resources)
+model_overrides:
+  "gpt-4o":
+    input_token_per_1m: { rate_usd: 2.50 }
+    output_token_per_1m: { rate_usd: 10.00 }
+    resources: "vendor_api"  # No GPU cost - vendor hosted
+  "claude-3-5-sonnet":
+    input_token_per_1m: { rate_usd: 3.00 }
+    output_token_per_1m: { rate_usd: 15.00 }
+    resources: "vendor_api"
+  "llama-3.1-70b":
+    gpu_hour: { rate_usd: 4.50 }  # Self-hosted on A100
+    resources: "self_hosted"
+  "llama-3.1-8b":
+    gpu_hour: { rate_usd: 1.20 }  # Can run on smaller GPU (L4/T4)
+    resources: "self_hosted"
+  "text-embedding-3-large":
+    input_token_per_1m: { rate_usd: 0.13 }
+    resources: "vendor_api"
+  "bge-large-en-v1.5":
+    gpu_hour: { rate_usd: 1.20 }
+    resources: "self_hosted"
+
+# Tenant-level budgets (optional, for governance)
+tenant_budgets:
+  "team-platform":
+    monthly_usd: 50000
+    alert_threshold_pct: 80
+  "customer-acme":
+    monthly_usd: 10000
+    alert_threshold_pct: 90
+  "internal-rag":
+    monthly_usd: 5000
+    alert_threshold_pct: 100
+
+# Workflow-type multipliers (for differentiated pricing)
+workflow_multipliers:
+  "rag-qa": 1.0
+  "code-gen": 1.2          # Higher output tokens typical
+  "batch-embed": 0.8       # No output tokens, cache-friendly
+  "eval-harness": 1.5      # Many parallel requests, bursty
+```
+
+## Usage in Attribution Job
+
+```python
+import yaml
+
+with open("cost-model-v1.yaml") as f:
+    cost_model = yaml.safe_load(f)
+
+def get_rate(resource_key, model_id=None):
+    """Resolve rate with model override fallback."""
+    if model_id and model_id in cost_model.get("model_overrides", {}):
+        override = cost_model["model_overrides"][model_id]
+        if resource_key in override:
+            return override[resource_key]["rate_usd"]
+    return cost_model["resources"][resource_key]["rate_usd"]
+
+# Example: compute direct cost for one hourly bucket
+def compute_direct_cost(bucket, cost_model):
+    model = bucket["model_id"]
+    input_cost = bucket["prompt_tokens"] / 1e6 * get_rate("input_token_per_1m", model)
+    output_cost = bucket["completion_tokens"] / 1e6 * get_rate("output_token_per_1m", model)
+    cached_cost = bucket["cached_tokens"] / 1e6 * get_rate("cached_token_per_1m", model)
+    gpu_cost = bucket["gpu_ms"] / 3.6e6 * get_rate("gpu_hour", model)
+    egress_cost = bucket["egress_bytes"] / 1e9 * get_rate("egress_gb", model)
+    request_cost = bucket["request_count"] * get_rate("request_overhead_usd", model)
+    return {
+        "input": input_cost,
+        "output": output_cost,
+        "cached": cached_cost,
+        "gpu": gpu_cost,
+        "egress": egress_cost,
+        "request": request_cost,
+        "total": input_cost + output_cost + cached_cost + gpu_cost + egress_cost + request_cost
+    }
+```

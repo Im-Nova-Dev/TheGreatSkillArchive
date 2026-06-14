@@ -1,0 +1,36 @@
+---
+name: time-series-model-validator
+description: "Validate and compare time-series forecasts across sensor streams."
+version: 0.1.0
+category: technology
+---
+
+# Time Series Model Validator
+
+## Overview
+
+Validate and compare time-series forecasts across sensor streams.
+
+## When To Use
+
+- When you need a reusable procedure for validate and compare time-series forecasts across sensor streams.
+- When you want a starting template for Time Series Model Validator-related work
+- When automation should apply technology-oriented knowledge
+
+## Workflow
+
+1. Identify the exact scope and inputs for Time Series Model Validator.
+2. Apply the steps and commands in this skill in the documented order.
+3. Capture learnings so this skill can be expanded over time.
+
+## Example Usage
+
+```bash
+# Add concrete examples for Time Series Model Validator.
+echo "Example workflow for Time Series Model Validator goes here."
+```
+
+## Reference Notes
+
+- Auto-generated on 2026-06-05
+- Expand this file with examples, edge cases, and verification steps.
